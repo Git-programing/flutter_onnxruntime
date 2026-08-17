@@ -118,6 +118,8 @@ public class FlutterOnnxruntimePlugin: NSObject, FlutterPlugin {
       handleGetOrtValueData(call, result: result)
     case "releaseOrtValue":
       handleReleaseOrtValue(call, result: result)
+    case "releaseOrtValues":
+      handleReleaseOrtValues(call, result: result)
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -1141,6 +1143,29 @@ public class FlutterOnnxruntimePlugin: NSObject, FlutterPlugin {
 
     // Remove and release tensor
     ortValues.removeValue(forKey: valueId)
+
+    result(nil)
+  }
+
+  private func handleReleaseOrtValues(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let args = call.arguments as? [String: Any],
+          let valueIds = args["valueIds"] as? [String] else {
+      result(FlutterError(code: "INVALID_ARG", message: "Missing valueIds", details: nil))
+      return
+    }
+
+    if valueIds.isEmpty {
+      result(nil)
+      return
+    }
+
+#if DEBUG
+    print("[ORT_BATCH_RELEASE] count=\(valueIds.count)")
+#endif
+
+    for valueId in valueIds {
+      ortValues.removeValue(forKey: valueId)
+    }
 
     result(nil)
   }
