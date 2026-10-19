@@ -23,6 +23,48 @@ enum OrtError: Error {
     case flutterError(FlutterError)
 }
 
+private enum _ExecutionProviderDirective: Equatable {
+  case cpuDefault
+  case cpuUseArenaDisabled
+  case coreML
+  case xnnpack
+}
+
+private struct _ExecutionProviderPlan {
+  let directives: [_ExecutionProviderDirective]
+  let invalidProvider: String?
+}
+
+private func _buildExecutionProviderPlan(
+  providers: [String]?,
+  useArena: Bool?
+) -> _ExecutionProviderPlan {
+  var directives: [_ExecutionProviderDirective] = []
+  var sawCpu = false
+
+  if let providers, !providers.isEmpty {
+    for provider in providers {
+      switch provider {
+      case "CPU":
+        if !sawCpu {
+          directives.append(useArena == false ? .cpuUseArenaDisabled : .cpuDefault)
+          sawCpu = true
+        }
+      case "CORE_ML":
+        directives.append(.coreML)
+      case "XNNPACK":
+        directives.append(.xnnpack)
+      default:
+        return _ExecutionProviderPlan(directives: directives, invalidProvider: provider)
+      }
+    }
+  } else if useArena == false {
+    directives.append(.cpuUseArenaDisabled)
+  }
+
+  return _ExecutionProviderPlan(directives: directives, invalidProvider: nil)
+}
+
 // swiftlint:disable:next type_body_length
 public class FlutterOnnxruntimePlugin: NSObject, FlutterPlugin {
   private var sessions = [String: ORTSession]()
@@ -137,6 +179,8 @@ public class FlutterOnnxruntimePlugin: NSObject, FlutterPlugin {
       let sessionOptions = try ORTSessionOptions()
 
       if let options = args["sessionOptions"] as? [String: Any] {
+        let useArena = options["useArena"] as? Bool
+
         if let intraOpNumThreads = options["intraOpNumThreads"] as? Int {
           do {
             try sessionOptions.setIntraOpNumThreads(Int32(intraOpNumThreads))
@@ -152,30 +196,39 @@ public class FlutterOnnxruntimePlugin: NSObject, FlutterPlugin {
         //   try sessionOptions.setInterOpNumThreads(Int32(interOpNumThreads))
         // }
 
-        // get providers from options
-        if let providers = options["providers"] as? [String] {
-          for provider in providers {
-            switch provider {
-            case "CPU":
-              continue
-            case "CORE_ML":
-              do {
-                try sessionOptions.appendCoreMLExecutionProvider()
-              } catch {
-                result(FlutterError(code: "SESSION_OPTIONS_ERROR",
-                  message: "Failed to append CoreML execution provider: \(error.localizedDescription)", details: nil))
-                return
-              }
-            case "XNNPACK":
-              do {
-                try sessionOptions.appendXnnpackExecutionProvider(with: ORTXnnpackExecutionProviderOptions())
-              } catch {
-                result(FlutterError(code: "SESSION_OPTIONS_ERROR",
-                  message: "Failed to append XNNPACK execution provider: \(error.localizedDescription)", details: nil))
-                return
-              }
-            default:
-              result(FlutterError(code: "INVALID_PROVIDER", message: "Provider \(provider) is not supported", details: nil))
+        let providers = options["providers"] as? [String]
+        let plan = _buildExecutionProviderPlan(providers: providers, useArena: useArena)
+        if let invalidProvider = plan.invalidProvider {
+          result(FlutterError(code: "INVALID_PROVIDER", message: "Provider \(invalidProvider) is not supported", details: nil))
+          return
+        }
+
+        for directive in plan.directives {
+          switch directive {
+          case .cpuDefault:
+            continue
+          case .cpuUseArenaDisabled:
+            do {
+              try sessionOptions.appendExecutionProvider("CPU", providerOptions: ["use_arena": "0"])
+            } catch {
+              result(FlutterError(code: "SESSION_OPTIONS_ERROR",
+                message: "Failed to append CPU execution provider with use_arena=0: \(error.localizedDescription)", details: nil))
+              return
+            }
+          case .coreML:
+            do {
+              try sessionOptions.appendCoreMLExecutionProvider()
+            } catch {
+              result(FlutterError(code: "SESSION_OPTIONS_ERROR",
+                message: "Failed to append CoreML execution provider: \(error.localizedDescription)", details: nil))
+              return
+            }
+          case .xnnpack:
+            do {
+              try sessionOptions.appendXnnpackExecutionProvider(with: ORTXnnpackExecutionProviderOptions())
+            } catch {
+              result(FlutterError(code: "SESSION_OPTIONS_ERROR",
+                message: "Failed to append XNNPACK execution provider: \(error.localizedDescription)", details: nil))
               return
             }
           }
